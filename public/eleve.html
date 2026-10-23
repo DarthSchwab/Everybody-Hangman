@@ -46,8 +46,8 @@
   <div class="card hidden" id="vNames">
     <strong>Touche TON prénom</strong>
     <div class="muted">Une fois choisi, personne d'autre ne pourra le prendre.</div>
-    <div class="names" id="namesGrid"></div>
     <div class="msg err" id="namesMsg"></div>
+    <div class="names" id="namesGrid"></div>
   </div>
 
   <!-- 3. Saisie du mot -->
@@ -104,7 +104,14 @@ async function refresh(){
     if (e.status === 404){ stopPoll(); code = ""; $("codeMsg").textContent = e.message; show("vCode"); }
     return;
   }
-  if (me && !d.mine){ me = null; saveMe(null); }   // case libérée par le prof
+  // Case libérée par le prof ? On attend 3 réponses négatives d'affilée (~9 s)
+  // avant d'y croire : juste après la réservation, le serveur peut mettre
+  // une seconde à la confirmer.
+  if (me && !d.mine){
+    notMine++;
+    if (notMine >= 3){ me = null; saveMe(null); notMine = 0; }
+    else { showWord(); return; }
+  } else notMine = 0;
   if (!me){ renderNames(d); show("vNames"); return; }
 
   if (d.locked){ show("vLocked"); round = d.round; return; }
@@ -133,10 +140,17 @@ async function claim(index, name){
   if (!confirm("Tu es bien " + name + " ?")) return;
   try {
     const {token} = await api("claim", {body: {code, index}});
-    me = {index, token, name}; saveMe(me);
-    $("wordInput").value = ""; $("wordMsg").textContent = "";
-    refresh();
+    me = {index, token, name}; saveMe(me); notMine = 0;
+    $("wordInput").value = ""; $("wordMsg").textContent = ""; $("namesMsg").textContent = "";
+    showWord();                       // on passe tout de suite à la saisie du mot
   } catch(e){ $("namesMsg").textContent = e.message; refresh(); }
+}
+
+let notMine = 0;
+function showWord(){
+  if (!me) return;
+  $("meName").textContent = me.name;
+  show("vWord");
 }
 
 function setOk(t){ $("wordMsg").textContent = t; $("wordMsg").className = "msg ok"; }
@@ -146,7 +160,11 @@ $("sendBtn").onclick = async () => {
   const word = $("wordInput").value.trim();
   if (!word) return setErr("Écris un mot d'abord.");
   $("sendBtn").disabled = true;
-  try { await api("word", {body: {code, index: me.index, token: me.token, word}}); setOk("Mot envoyé ✓ Tu peux encore le changer."); $("wordInput").type = "password"; }
+  const send = () => api("word", {body: {code, index: me.index, token: me.token, word}});
+  try {
+    try { await send(); }
+    catch(e){ if (e.status !== 403) throw e; await new Promise(r => setTimeout(r, 1500)); await send(); } // une 2e chance si la réservation n'est pas encore visible
+    setOk("Mot envoyé ✓ Tu peux encore le changer."); $("wordInput").type = "password"; }
   catch(e){ setErr(e.message); if (e.status === 403 || e.status === 423) refresh(); }
   finally { $("sendBtn").disabled = false; }
 };
