@@ -1,0 +1,709 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Everybody Hangman</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<style>
+  :root{
+    --bg1: #f7fafc;
+    --card: #ffffff;
+    --text: #0b2545;
+    --muted: #5b6b80;
+    --accent: #1e6fff;
+    --accent-2: #40c4ff;
+    --good: #16a34a;
+    --danger: #ef4444;
+    --glass: rgba(11,37,69,0.04);
+  }
+  html,body{height:100%;margin:0;font-family:Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; background:linear-gradient(180deg,var(--bg1),#eef6ff); color:var(--text);}
+  .wrap{max-width:1400px;margin:8px auto;padding:12px;display:flex;flex-direction:column;gap:10px;box-sizing:border-box;}
+  header{display:flex;align-items:center;justify-content:space-between;gap:12px}
+  h1{margin:0;font-size:1.3rem}
+  .subtitle{color:var(--muted);font-size:0.9rem}
+
+  .card{background:var(--card);border-radius:10px;padding:10px;border:1px solid rgba(11,37,69,0.06);box-shadow:0 6px 18px rgba(13,38,80,0.03)}
+
+  .controls{display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap}
+  .btn{background:var(--accent);color:white;padding:9px 12px;border-radius:8px;border:none;cursor:pointer;font-weight:700}
+  .btn.ghost{background:transparent;color:var(--text);border:1px solid rgba(11,37,69,0.06)}
+  .btn.big{padding:12px 16px;font-size:1rem}
+
+  /* Layout: left column compact and scrollable, right panel showing 16 cards grid */
+  .game-wrap{display:grid;grid-template-columns:260px 1fr;gap:14px;align-items:start}
+  /* left column compaction */
+  .scores{display:flex;flex-direction:column;gap:8px;padding:8px;max-height:calc(100vh - 140px);overflow:auto}
+  .player{display:flex;align-items:center;justify-content:space-between;padding:8px;border-radius:8px;background:var(--glass);border:1px solid rgba(11,37,69,0.03)}
+  .player .left{display:flex;gap:8px;align-items:center}
+  .avatar{width:40px;height:40px;border-radius:8px;background:linear-gradient(135deg,var(--accent),var(--accent-2));display:flex;align-items:center;justify-content:center;color:white;font-weight:800;font-size:0.95rem}
+  .name{font-weight:800;font-size:0.95rem}
+  .score{font-weight:900;font-size:1.02rem;min-width:48px;text-align:center}
+  .score-controls{display:flex;flex-direction:column;gap:6px;align-items:flex-end}
+  .score-controls button{padding:6px 8px;border-radius:6px;border:1px solid rgba(11,37,69,0.06);background:transparent;cursor:pointer;font-weight:700}
+
+  .leader{animation: leaderGlow 1.1s linear infinite;border:2px solid rgba(30,111,255,0.12) !important;box-shadow:0 6px 16px rgba(30,111,255,0.04)}
+  @keyframes leaderGlow {0%{transform:scale(1)}50%{transform:scale(1.01)}100%{transform:scale(1)}}
+
+  /* right panel: ensure 16-word grid visible without scroll */
+  .panel{padding:12px;border-radius:10px;min-height:calc(100vh - 140px);box-sizing:border-box}
+  .letter-row{display:flex;gap:8px;align-items:center;margin-bottom:10px}
+  .letter-row input{width:150px;padding:10px;border-radius:8px;border:1px solid rgba(11,37,69,0.06);font-size:1.05rem}
+  .guessed{color:var(--muted);font-weight:700}
+
+  /* grid: 4 columns x 4 rows = 16 cards */
+  .words-grid{display:grid;grid-template-columns:repeat(4,1fr);grid-auto-rows:1fr;gap:12px;height:calc(100% - 52px)} /* leave space for input row */
+  .word-card{padding:10px;border-radius:8px;background:linear-gradient(180deg,#fff,#f6fbff);border:1px solid rgba(11,37,69,0.04);display:flex;flex-direction:column;justify-content:space-between;overflow:hidden;transition:transform .25s ease, box-shadow .25s ease, background-color .3s ease}
+  .word-card:hover{transform:translateY(-4px)}
+  .word-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+  .underscores{font-size:1.4rem;letter-spacing:8px;font-weight:900;color:var(--text);display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .char{min-width:12px;text-align:center}
+  .char.blank{opacity:0.28}
+  .char.revealed{color:var(--accent)}
+
+  /* make cards compact so 16 fit */
+  .word-card .name{font-size:1rem}
+  .word-card .underscores{font-size:1.6rem;letter-spacing:10px}
+
+  /* reveal animation */
+  .word-card.revealed-card{background:linear-gradient(180deg,#e8fdf0,#e6fbf6);border-color:rgba(22,163,74,0.2);box-shadow:0 8px 24px rgba(22,163,74,0.07);}
+  .word-card.revealed-card .underscores{color:var(--good)}
+
+  /* responsive: if narrow, switch to 2 columns */
+  @media (max-width:1000px){
+    .game-wrap{grid-template-columns:1fr; }
+    .words-grid{grid-template-columns:repeat(2,1fr);height:auto}
+    .panel{min-height:400px}
+  }
+
+  .small{font-size:0.9rem;color:var(--muted)}
+
+  /* --- Extraction / roster table --- */
+  #rawPasteArea{width:100%;height:140px;padding:10px;font-size:0.95rem;border-radius:8px;border:1px dashed rgba(11,37,69,0.15);resize:vertical;box-sizing:border-box;font-family:monospace;margin-top:8px}
+  details#pasteDetails summary{font-weight:700;cursor:pointer;padding:4px 0}
+  details#pasteDetails summary::-webkit-details-marker{color:var(--accent)}
+
+  #rosterTable{width:100%;border-collapse:collapse;margin-top:6px}
+  #rosterTable thead th{text-align:left;padding:6px 8px;font-size:0.8rem;color:var(--muted);border-bottom:1px solid rgba(11,37,69,0.08)}
+  #rosterTable tbody td{padding:3px 6px;vertical-align:middle}
+  #rosterTable tbody td.idx{color:var(--muted);font-size:0.85rem;width:24px;text-align:right}
+  .roster-input{width:100%;padding:7px 9px;border-radius:7px;border:1px solid rgba(11,37,69,0.10);box-sizing:border-box;font-family:inherit;font-size:0.95rem}
+  .roster-input.roster-name{font-weight:700}
+  .roster-input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px rgba(30,111,255,0.12)}
+  .roster-wrap{max-height:420px;overflow:auto;border:1px solid rgba(11,37,69,0.05);border-radius:8px;padding:2px 6px}
+
+  .instructions{background:#fff3cd;border:1px solid #ffeeba;padding:10px 12px;border-radius:8px;font-size:0.88rem;line-height:1.5}
+  .instructions ol{margin:4px 0 0 18px;padding:0}
+
+
+  /* --- Salle élèves (téléphones) --- */
+  .room{border:2px solid rgba(30,111,255,.18);background:linear-gradient(180deg,#f3f8ff,#fff);border-radius:10px;padding:12px}
+  .room-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+  .room-body{display:flex;gap:16px;align-items:center;margin-top:10px;flex-wrap:wrap}
+  .room-code{font-size:2.4rem;font-weight:900;letter-spacing:8px;color:var(--accent)}
+  .room-url{font-family:monospace;font-size:1rem;word-break:break-all}
+  #qrSmall{background:#fff;padding:6px;border-radius:8px;line-height:0}
+  .pill{display:inline-block;padding:4px 10px;border-radius:999px;font-weight:800;font-size:.85rem}
+  .pill.open{background:#dcfce7;color:#166534} .pill.locked{background:#fee2e2;color:#991b1b}
+  .count{font-weight:800}
+  td.status{white-space:nowrap;font-size:.85rem;width:150px}
+  .st{font-weight:700}
+  .st.wait{color:#a0aab8} .st.conn{color:#b45309} .st.done{color:var(--good)}
+  .mini{padding:3px 7px;font-size:.75rem;border-radius:6px;border:1px solid rgba(11,37,69,.12);background:#fff;cursor:pointer;margin-left:4px}
+  #qrOverlay{position:fixed;inset:0;background:rgba(255,255,255,.98);z-index:10000;display:none;flex-direction:column;align-items:center;justify-content:center;gap:18px;cursor:pointer}
+  #qrOverlay .room-code{font-size:4.5rem}
+  #qrOverlay .room-url{font-size:1.6rem}
+  #qrBig{background:#fff;padding:12px;line-height:0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header style="display:flex;align-items:center;justify-content:space-between">
+    <div>
+      <h1>Everybody Hangman</h1>
+      <div class="subtitle">Extrais les prénoms depuis NetYparéo, puis saisis les mots… ou laisse les élèves les écrire sur leur téléphone</div>
+    </div>
+    <div>
+      <button id="downloadBtn" class="btn ghost">Télécharger CSV</button>
+    </div>
+  </header>
+
+  <!-- Setup -->
+  <section id="setupView" class="card">
+    <div style="display:flex;flex-direction:column;gap:10px">
+
+      <div class="instructions">
+        <strong>Mode d'emploi :</strong>
+        <ol>
+          <li>Connecte-toi à NetYparéo, ouvre l'onglet « Inscrits à la séance », sélectionne et copie tout le tableau (avec la ligne d'en-tête).</li>
+          <li>Colle-le ci-dessous puis clique sur « Extraire les prénoms ».</li>
+          <li>La colonne « Prénom » se remplit. Corrige-la si besoin, ajoute/retire un élève à la main.</li>
+          <li>Complète toi-même les mots <em>ou</em> clique sur « 📱 Saisie sur téléphones » : les élèves scannent le QR code, touchent leur prénom et écrivent leur mot. Chacun ne peut écrire que dans sa case.</li>
+          <li>Clique sur « Lancer la partie » : le jeu utilise l'état actuel du tableau, quels que soient les changements faits après l'extraction.</li>
+        </ol>
+      </div>
+
+      <details id="pasteDetails" open>
+        <summary>📋 Coller le tableau NetYparéo</summary>
+        <textarea id="rawPasteArea" placeholder="Colle ici le tableau copié depuis NetYparéo (avec la ligne d'en-têtes)..."></textarea>
+        <div class="controls">
+          <button id="extractBtn" class="btn">Extraire les prénoms →</button>
+          <button id="clearPasteBtn" class="btn ghost">Vider le collage</button>
+        </div>
+      </details>
+
+      <div class="controls" id="roomStartRow">
+        <button id="openRoomBtn" class="btn">📱 Saisie sur téléphones</button>
+        <button id="resumeRoomBtn" class="btn ghost" style="display:none"></button>
+        <span class="small">Les mots restent masqués à l'écran (bouton 👁 pour les voir).</span>
+      </div>
+
+      <div id="roomPanel" class="room" style="display:none">
+        <div class="room-head">
+          <div><strong>Salle élèves</strong> &nbsp;<span id="roomState" class="pill open">Saisie ouverte</span>
+            &nbsp;<span class="count" id="roomCount"></span></div>
+          <div class="controls" style="margin-top:0">
+            <button id="qrFullBtn" class="btn">Afficher le QR en grand</button>
+            <button id="lockBtn" class="btn ghost">🔒 Verrouiller</button>
+            <button id="closeRoomBtn" class="btn ghost">Fermer la salle</button>
+          </div>
+        </div>
+        <div class="room-body">
+          <div id="qrSmall"></div>
+          <div>
+            <div class="small">Code de la salle</div>
+            <div class="room-code" id="roomCode"></div>
+            <div class="small">ou va sur</div>
+            <div class="room-url" id="roomUrl"></div>
+          </div>
+        </div>
+        <div class="small" id="roomErr" style="color:var(--danger);font-weight:700;margin-top:6px"></div>
+      </div>
+
+      <div class="roster-wrap">
+        <table id="rosterTable">
+          <thead>
+            <tr><th class="idx">#</th><th>Prénom</th><th>Mot de pendu <button type="button" id="eyeAllBtn" class="mini" title="Afficher / masquer les mots">👁</button></th><th class="status-h" style="display:none">Téléphone</th></tr>
+          </thead>
+          <tbody id="rosterBody"></tbody>
+        </table>
+      </div>
+
+      <div class="controls">
+        <button id="startBtn" class="btn big">Lancer la partie →</button>
+        <button id="loadSample" class="btn ghost">Charger exemple</button>
+        <button id="clearBtn" class="btn ghost">Tout effacer</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Game view -->
+  <section id="gameView" style="display:none" class="game-wrap">
+    <aside class="card scores" aria-label="Scores">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <strong>Scores</strong>
+        <div class="small">+1 / -1</div>
+      </div>
+      <div id="playersList"></div>
+
+      <div style="margin-top:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
+        <button id="editBtn" class="btn ghost">✎ Éditer</button>
+        <button id="revealAllBtn" class="btn ghost">Tout révéler</button>
+        <button id="resetBtn" class="btn ghost">Réinitialiser</button>
+        <button id="newRoundBtn" class="btn ghost">Nouvelle manche</button>
+      </div>
+    </aside>
+
+    <main class="card panel">
+      <div class="letter-row">
+        <input id="letterInput" placeholder="Entrer une lettre (ex: a)" maxlength="4" />
+        <button id="guessBtn" class="btn">Entrer</button>
+        <div style="flex:1"></div>
+        <div class="guessed">Lettres proposées : <span id="guessedList">—</span></div>
+      </div>
+
+      <div id="wordsGrid" class="words-grid" role="list"></div>
+
+    </main>
+  </section>
+</div>
+
+<div id="qrOverlay" title="Cliquer pour fermer">
+  <div style="font-size:1.6rem;font-weight:800">Scanne pour écrire ton mot</div>
+  <div id="qrBig"></div>
+  <div class="room-url" id="roomUrlBig"></div>
+  <div class="room-code" id="roomCodeBig"></div>
+  <div class="small">Cliquer n'importe où pour fermer</div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const rawPasteArea = document.getElementById('rawPasteArea');
+  const extractBtn = document.getElementById('extractBtn');
+  const clearPasteBtn = document.getElementById('clearPasteBtn');
+  const rosterBody = document.getElementById('rosterBody');
+  const startBtn = document.getElementById('startBtn');
+  const loadSample = document.getElementById('loadSample');
+  const clearBtn = document.getElementById('clearBtn');
+  const setupView = document.getElementById('setupView');
+  const gameView = document.getElementById('gameView');
+  const playersList = document.getElementById('playersList');
+  const wordsGrid = document.getElementById('wordsGrid');
+  const letterInput = document.getElementById('letterInput');
+  const guessBtn = document.getElementById('guessBtn');
+  const guessedListSpan = document.getElementById('guessedList');
+  const editBtn = document.getElementById('editBtn');
+  const revealAllBtn = document.getElementById('revealAllBtn');
+  const resetBtn = document.getElementById('resetBtn');
+  const newRoundBtn = document.getElementById('newRoundBtn');
+  const downloadBtn = document.getElementById('downloadBtn');
+
+  const MAX_STUDENTS = 16;
+
+  let players = [];
+  let guessedLetters = new Set();
+  let nextId = 1;
+
+  function uid(){ return nextId++; }
+  function normalizeForCompare(s){ if(!s) return ''; try{return s.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();}catch(e){return (''+s).toLowerCase();} }
+  function isLetter(ch){ return /\p{L}/u.test(ch); }
+  function escapeHtml(s){ return (s+'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function maskSmall(p){ return (p.word || '').replace(/[^\s-']/g,'•').slice(0,22); }
+
+  // ---------- Extraction (repris de la Roue) ----------
+  function extractFullNames(text){
+    // NetYparéo colle un tableau où le nom de l'élève apparaît toutes les 4 lignes,
+    // en commençant à la 2e ligne (index 1) après l'en-tête.
+    const lines = text.replace(/\r/g,'').split('\n').map(l=>l.trim()).filter(l=>l.length>0);
+    const result = [];
+    for(let i=1;i<lines.length;i+=4){ result.push(lines[i]); }
+    return result;
+  }
+  function firstNamesFrom(fullArr){
+    // Le prénom est tout ce qui suit le premier espace du nom complet ("NOM Prénom").
+    return fullArr.map(s => {
+      const idx = s.indexOf(' ');
+      if(idx === -1) return s.trim();
+      return s.slice(idx+1).trim();
+    });
+  }
+
+  // ---------- Tableau éditable prénom / mot ----------
+  function buildRosterRows(entries){
+    rosterBody.innerHTML = '';
+    for(let i=0;i<MAX_STUDENTS;i++){
+      const e = (entries && entries[i]) ? entries[i] : {name:'', word:''};
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td class="idx">${i+1}</td>
+        <td><input class="roster-input roster-name" placeholder="Prénom" value="${escapeHtml(e.name||'')}"></td>
+        <td><input class="roster-input roster-word" type="${wordsVisible ? 'text' : 'password'}" autocomplete="off" placeholder="Mot à deviner" value="${escapeHtml(e.word||'')}"></td>
+        <td class="status" style="display:${room ? '' : 'none'}"></td>`;
+      const nameIn = tr.querySelector('.roster-name');
+      const wordIn = tr.querySelector('.roster-word');
+      nameIn.addEventListener('change', () => { if(room) pushNames(); });
+      wordIn.addEventListener('change', () => { if(room) pushWord(i, wordIn.value); });
+      rosterBody.appendChild(tr);
+    }
+    if(room) renderRoomStatus();
+  }
+
+  function fillRosterNames(prenoms){
+    // Ne touche que la colonne Prénom ; la colonne Mot est repartie de zéro
+    // puisqu'une nouvelle extraction correspond à une nouvelle liste d'élèves.
+    const rows = Array.from(rosterBody.querySelectorAll('tr'));
+    rows.forEach((tr, i) => {
+      tr.querySelector('.roster-name').value = prenoms[i] || '';
+      tr.querySelector('.roster-word').value = '';
+    });
+  }
+
+  // C'est cette fonction, appelée seulement au clic sur "Lancer la partie",
+  // qui fait foi : elle lit l'état ACTUEL du tableau (édité ou non depuis
+  // l'extraction), jamais le texte brut collé ni le résultat de l'extraction.
+  function readRosterEntries(){
+    const rows = Array.from(rosterBody.querySelectorAll('tr'));
+    return rows.map(tr => ({
+      name: tr.querySelector('.roster-name').value.trim(),
+      word: tr.querySelector('.roster-word').value.trim()
+    }));
+  }
+
+  extractBtn.onclick = () => {
+    const fulls = extractFullNames(rawPasteArea.value || '');
+    if(fulls.length === 0){
+      alert("Aucun nom trouvé. Vérifie que tu as bien collé le tableau NetYparéo complet, en-tête comprise.");
+      return;
+    }
+    let prenoms = firstNamesFrom(fulls);
+    if(prenoms.length > MAX_STUDENTS){
+      alert(`${prenoms.length} prénoms détectés — seuls les ${MAX_STUDENTS} premiers seront gardés (${MAX_STUDENTS} cases max dans le jeu).`);
+      prenoms = prenoms.slice(0, MAX_STUDENTS);
+    }
+    fillRosterNames(prenoms);
+    if(room) pushNames();
+  };
+
+  clearPasteBtn.onclick = () => { rawPasteArea.value = ''; };
+
+  // ---------- Salle élèves (saisie sur téléphones) ----------
+  // room = {code, adminKey} ; les mots arrivent par l'API, jamais affichés en clair
+  // par défaut (l'écran est projeté).
+  const ROOM_LS = 'ehm-teacher-room';
+  let room = null;
+  let roomData = null;
+  let pollTimer = null;
+  let wordsVisible = false;
+
+  const openRoomBtn = document.getElementById('openRoomBtn');
+  const resumeRoomBtn = document.getElementById('resumeRoomBtn');
+  const roomPanel = document.getElementById('roomPanel');
+  const roomErr = document.getElementById('roomErr');
+  const lockBtn = document.getElementById('lockBtn');
+  const qrOverlay = document.getElementById('qrOverlay');
+
+  async function api(action, body, query){
+    const url = '/api/' + action + (query ? '?' + new URLSearchParams(query) : '');
+    const r = await fetch(url, body ? {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body)} : {});
+    const data = await r.json().catch(() => ({}));
+    if(!r.ok) throw Object.assign(new Error(data.error || ('Erreur ' + r.status)), {status: r.status});
+    return data;
+  }
+  function namesFromTable(){ return readRosterEntries().map(e => e.name); }
+  function studentUrl(){ return location.origin + '/eleve.html?salle=' + room.code; }
+  function saveRoom(){ try{ room ? localStorage.setItem(ROOM_LS, JSON.stringify(room)) : localStorage.removeItem(ROOM_LS); }catch(e){} }
+
+  function showRoomPanel(){
+    roomPanel.style.display = '';
+    openRoomBtn.style.display = 'none'; resumeRoomBtn.style.display = 'none';
+    document.querySelectorAll('.status-h, td.status').forEach(el => el.style.display = '');
+    document.getElementById('roomCode').textContent = room.code;
+    document.getElementById('roomCodeBig').textContent = room.code;
+    const shortUrl = location.host + '/eleve.html';
+    document.getElementById('roomUrl').textContent = shortUrl;
+    document.getElementById('roomUrlBig').textContent = shortUrl + '  —  code';
+    const qs = document.getElementById('qrSmall'); qs.innerHTML = '';
+    const qb = document.getElementById('qrBig'); qb.innerHTML = '';
+    if(window.QRCode){
+      new QRCode(qs, {text: studentUrl(), width: 150, height: 150});
+      new QRCode(qb, {text: studentUrl(), width: Math.min(innerHeight - 280, 520), height: Math.min(innerHeight - 280, 520)});
+    } else { qs.textContent = '(QR indisponible hors ligne)'; }
+  }
+  function hideRoomPanel(){
+    roomPanel.style.display = 'none';
+    openRoomBtn.style.display = '';
+    document.querySelectorAll('.status-h, td.status').forEach(el => el.style.display = 'none');
+  }
+
+  openRoomBtn.onclick = async () => {
+    const names = namesFromTable();
+    if(!names.some(Boolean)){ alert("Remplis d'abord la colonne Prénom (extraction NetYparéo ou saisie)."); return; }
+    openRoomBtn.disabled = true;
+    try{
+      const d = await api('create', {names});
+      room = {code: d.code, adminKey: d.adminKey}; saveRoom();
+      // on garde les mots déjà tapés par le prof
+      const entries = readRosterEntries();
+      for(let i=0;i<entries.length;i++){ if(entries[i].word) await pushWord(i, entries[i].word); }
+      showRoomPanel(); startPoll(); poll();
+    }catch(e){
+      alert("Impossible de créer la salle : " + e.message + "\n\nCette fonction ne marche qu'une fois le site publié sur Netlify (pas en ouvrant le fichier en local).");
+    }finally{ openRoomBtn.disabled = false; }
+  };
+
+  resumeRoomBtn.onclick = async () => {
+    try{
+      const saved = JSON.parse(localStorage.getItem(ROOM_LS));
+      const d = await api('admin', null, {code: saved.code, key: saved.adminKey});
+      room = saved;
+      buildRosterRows(d.names.map((n, i) => ({name: n, word: d.words[i] || ''})));
+      showRoomPanel(); startPoll(); applyRoomData(d);
+    }catch(e){ alert('Salle introuvable : ' + e.message); try{localStorage.removeItem(ROOM_LS);}catch(_){} resumeRoomBtn.style.display = 'none'; }
+  };
+
+  document.getElementById('closeRoomBtn').onclick = () => {
+    if(!confirm('Fermer la salle ? Les mots déjà reçus restent dans le tableau, mais les téléphones ne pourront plus écrire.')) return;
+    api('lock', {code: room.code, key: room.adminKey, locked: true}).catch(()=>{});
+    stopPoll(); room = null; roomData = null; saveRoom(); hideRoomPanel();
+  };
+
+  lockBtn.onclick = async () => {
+    if(!roomData) return;
+    try{ await api('lock', {code: room.code, key: room.adminKey, locked: !roomData.locked}); poll(); }
+    catch(e){ roomErr.textContent = e.message; }
+  };
+
+  document.getElementById('qrFullBtn').onclick = () => { qrOverlay.style.display = 'flex'; };
+  qrOverlay.onclick = () => { qrOverlay.style.display = 'none'; };
+
+  document.getElementById('eyeAllBtn').onclick = () => {
+    wordsVisible = !wordsVisible;
+    rosterBody.querySelectorAll('.roster-word').forEach(inp => inp.type = wordsVisible ? 'text' : 'password');
+  };
+
+  let namesTimer = null;
+  function pushNames(){
+    clearTimeout(namesTimer);
+    namesTimer = setTimeout(async () => {
+      try{ await api('setnames', {code: room.code, key: room.adminKey, names: namesFromTable()}); poll(); }
+      catch(e){ roomErr.textContent = e.message; }
+    }, 300);
+  }
+  async function pushWord(i, word){
+    if(!room) return;
+    const inp = rosterBody.querySelectorAll('.roster-word')[i];
+    if(inp) inp.dataset.pending = '1';
+    try{ await api('setword', {code: room.code, key: room.adminKey, index: i, word}); roomErr.textContent=''; }
+    catch(e){ roomErr.textContent = 'Ligne ' + (i+1) + ' : ' + e.message; }
+    finally{ if(inp) delete inp.dataset.pending; }
+  }
+
+  async function poll(){
+    if(!room) return;
+    try{
+      const d = await api('admin', null, {code: room.code, key: room.adminKey});
+      roomErr.textContent = '';
+      applyRoomData(d);
+    }catch(e){
+      roomErr.textContent = 'Connexion perdue (' + e.message + ') — nouvelle tentative…';
+    }
+  }
+  function applyRoomData(d){
+    roomData = d;
+    const rows = Array.from(rosterBody.querySelectorAll('tr'));
+    rows.forEach((tr, i) => {
+      const inp = tr.querySelector('.roster-word');
+      if(document.activeElement !== inp && !inp.dataset.pending && i < d.words.length) inp.value = d.words[i] || '';
+    });
+    renderRoomStatus();
+  }
+  function renderRoomStatus(){
+    if(!roomData) return;
+    const rows = Array.from(rosterBody.querySelectorAll('tr'));
+    let named = 0, done = 0;
+    rows.forEach((tr, i) => {
+      const td = tr.querySelector('td.status');
+      const name = tr.querySelector('.roster-name').value.trim();
+      const word = tr.querySelector('.roster-word').value.trim();
+      if(!name){ td.innerHTML = ''; return; }
+      named++;
+      const claimed = roomData.claimed[i];
+      if(word) done++;
+      let html = word ? '<span class="st done">✓ mot reçu</span>'
+               : claimed ? '<span class="st conn">📱 connecté…</span>'
+               : '<span class="st wait">en attente</span>';
+      if(claimed) html += ` <button type="button" class="mini rel" data-i="${i}" title="Libérer la case (si un élève s'est trompé de prénom)">Libérer</button>`;
+      td.innerHTML = html;
+    });
+    rosterBody.querySelectorAll('.rel').forEach(b => b.onclick = async () => {
+      const i = Number(b.dataset.i);
+      if(!confirm('Libérer la case de ' + rows[i].querySelector('.roster-name').value + ' ? Son mot sera effacé et il pourra se reconnecter.')) return;
+      await api('release', {code: room.code, key: room.adminKey, index: i}).catch(e => roomErr.textContent = e.message);
+      rows[i].querySelector('.roster-word').value = '';
+      poll();
+    });
+    document.getElementById('roomCount').textContent = `${done} / ${named} mots reçus`;
+    const st = document.getElementById('roomState');
+    st.textContent = roomData.locked ? 'Saisie verrouillée' : 'Saisie ouverte';
+    st.className = 'pill ' + (roomData.locked ? 'locked' : 'open');
+    lockBtn.textContent = roomData.locked ? '🔓 Rouvrir la saisie' : '🔒 Verrouiller';
+  }
+  function startPoll(){ stopPoll(); pollTimer = setInterval(() => { if(setupView.style.display !== 'none') poll(); }, 2500); }
+  function stopPoll(){ if(pollTimer) clearInterval(pollTimer); pollTimer = null; }
+
+  // ---------- Rendu du jeu ----------
+  function renderPlayersColumn(){
+    playersList.innerHTML = '';
+    const maxScore = players.length ? Math.max(...players.map(p=>p.score)) : 0;
+    players.forEach(p => {
+      const div = document.createElement('div');
+      div.className = 'player';
+      if(p.score === maxScore && maxScore !== 0) div.classList.add('leader');
+      div.dataset.id = p.id;
+      div.innerHTML = `
+        <div class="left">
+          <div class="avatar">${escapeHtml((p.name||'').slice(0,2)).toUpperCase()}</div>
+          <div style="margin-left:8px">
+            <div class="name">${escapeHtml(p.name||'')}</div>
+            <div class="small">Mot: <strong>${maskSmall(p)}</strong></div>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
+          <div class="score" id="score-${p.id}">${p.score}</div>
+          <div style="display:flex;gap:6px">
+            <button class="btn ghost btn-minus" data-id="${p.id}">-1</button>
+            <button class="btn ghost btn-plus" data-id="${p.id}">+1</button>
+          </div>
+        </div>`;
+      playersList.appendChild(div);
+    });
+    Array.from(document.querySelectorAll('.btn-plus')).forEach(b => b.onclick = () => changeScore(Number(b.dataset.id), +1));
+    Array.from(document.querySelectorAll('.btn-minus')).forEach(b => b.onclick = () => changeScore(Number(b.dataset.id), -1));
+  }
+
+  function renderWordsGrid(){
+    wordsGrid.innerHTML = '';
+    const displayCount = 16;
+    for(let i=0;i<displayCount;i++){
+      const p = players[i];
+      const card = document.createElement('div');
+      card.className = 'word-card';
+      if(p){
+        const found = isWordFullyRevealed(p);
+        if(found) card.classList.add('revealed-card');
+        const head = document.createElement('div'); head.className='word-head';
+        head.innerHTML = `<div style="font-weight:800">${escapeHtml(p.name||'')}</div><div class="small">${found ? 'Trouvé' : 'En cours'}</div>`;
+        card.appendChild(head);
+        const unders = document.createElement('div'); unders.className = 'underscores';
+        const chars = Array.from(p.word || '');
+        if(chars.length === 0){
+          const ph = document.createElement('div'); ph.className='char revealed'; ph.textContent='(aucun mot)'; unders.appendChild(ph);
+        } else {
+          chars.forEach(ch => {
+            const span = document.createElement('div'); span.className='char';
+            if(!isLetter(ch)){ span.classList.add('revealed'); span.textContent = ch; }
+            else {
+              // reveal if globally guessed OR if this player's fullyRevealed flag set
+              const norm = normalizeForCompare(ch);
+              const revealed = guessedLetters.has(norm) || p.fullyRevealed;
+              span.classList.add(revealed ? 'revealed' : 'blank');
+              span.textContent = revealed ? ch : '_';
+            }
+            unders.appendChild(span);
+          });
+        }
+        card.appendChild(unders);
+        const controls = document.createElement('div'); controls.style.marginTop='6px'; controls.style.display='flex'; controls.style.gap='6px';
+        // only single "Révéler" button as requested
+        const revealBtn = document.createElement('button'); revealBtn.className='btn ghost'; revealBtn.textContent='Révéler'; revealBtn.onclick = ()=> revealWordLocal(p.id);
+        controls.appendChild(revealBtn);
+        card.appendChild(controls);
+      } else {
+        card.innerHTML = '<div style="color:var(--muted);font-weight:700;text-align:center">—</div>';
+      }
+      wordsGrid.appendChild(card);
+    }
+  }
+
+  function changeScore(id, delta){ const p = players.find(x=>x.id===id); if(!p) return; p.score += delta; renderPlayersColumn(); highlightLeader(); }
+  function highlightLeader(){ const maxScore = players.length ? Math.max(...players.map(p=>p.score)) : 0; document.querySelectorAll('.player').forEach(el => el.classList.remove('leader')); players.forEach(p => { if(p.score === maxScore && maxScore !== 0){ const n = [...document.querySelectorAll('.player')].find(x => Number(x.dataset.id) === p.id); if(n) n.classList.add('leader'); } }); }
+
+  function processGuess(raw){ if(!raw) return; const first = Array.from(raw).find(c => isLetter(c)); if(!first) return; const norm = normalizeForCompare(first); if(guessedLetters.has(norm)){ flashInput('Lettre déjà proposée'); return; } guessedLetters.add(norm); updateAfterGuess(); }
+  function updateAfterGuess(){ renderWordsGrid(); renderPlayersColumn(); updateGuessedList(); checkBonuses(); highlightLeader(); }
+  function updateGuessedList(){ guessedListSpan.textContent = Array.from(guessedLetters).join(', ') || '—'; }
+
+  function isWordFullyRevealed(p){ if(p.fullyRevealed) return true; const letters = Array.from(p.word || '').filter(ch => isLetter(ch)); if(letters.length === 0) return true; return letters.every(ch => guessedLetters.has(normalizeForCompare(ch))); }
+
+  function checkBonuses(){ const notFound = players.filter(p => !isWordFullyRevealed(p)); if(notFound.length === 1){ const last = notFound[0]; if(!last.bonusGiven){ last.score += 5; last.bonusGiven = true; flashPlayer(last.id, `+5 bonus (dernier mot non trouvé)`); renderPlayersColumn(); highlightLeader(); } } }
+
+  function flashInput(msg){ const orig = letterInput.placeholder; letterInput.value = ''; letterInput.placeholder = msg; setTimeout(()=> letterInput.placeholder = orig,1200); letterInput.focus(); }
+  function flashPlayer(id,msg){ const t = document.createElement('div'); t.textContent = msg; Object.assign(t.style,{position:'fixed',right:'18px',bottom:'18px',background:'#063b17',color:'white',padding:'8px 12px',borderRadius:'8px',zIndex:9999}); document.body.appendChild(t); setTimeout(()=> t.remove(),1400); }
+
+  function revealWordLocal(id){ const p = players.find(x=>x.id===id); if(!p) return; p.fullyRevealed = true; // do NOT add letters to global guessedLetters, so they don't affect other words
+    // mark as found for UI and bonus check
+    updateAfterGuess();
+  }
+  function markFound(id){ revealWordLocal(id); }
+
+  function buildPlayers(entries){ players = entries.map(e => ({ id: uid(), name: e.name, word: e.word, norm: normalizeForCompare(e.word), score: 0, bonusGiven: false, fullyRevealed: false })); guessedLetters = new Set(); renderGame(); }
+
+  function renderGame(){ renderPlayersColumn(); renderWordsGrid(); updateGuessedList(); highlightLeader(); }
+
+  // ---------- Handlers ----------
+  startBtn.onclick = async () => {
+    if(room){
+      // on verrouille la saisie puis on récupère les derniers mots envoyés
+      try{
+        await api('lock', {code: room.code, key: room.adminKey, locked: true});
+        await poll();
+      }catch(e){ if(!confirm('Impossible de joindre la salle (' + e.message + '). Lancer quand même avec les mots déjà reçus ?')) return; }
+      const missing = readRosterEntries().filter(e => e.name && !e.word).map(e => e.name);
+      if(missing.length && !confirm('Pas encore de mot pour : ' + missing.join(', ') + '.\nLancer quand même ?')){
+        api('lock', {code: room.code, key: room.adminKey, locked: false}).then(poll).catch(()=>{});
+        return;
+      }
+    }
+    const entries = readRosterEntries(); // lit l'état courant du tableau, pas l'extraction brute
+    if(entries.every(e => !e.name)){ alert('Aucun prénom dans le tableau. Extrais une liste ou saisis au moins un prénom.'); return; }
+    nextId = 1;
+    buildPlayers(entries);
+    setupView.style.display = 'none';
+    gameView.style.display = 'grid';
+    letterInput.focus();
+  };
+
+  loadSample.onclick = () => {
+    buildRosterRows([
+      {name:'Alice', word:'banane'},
+      {name:'Bob', word:'château'},
+      {name:'Élodie', word:'république'},
+      {name:'Marc', word:'ordinateur'},
+      {name:'Sofia', word:'département'},
+      {name:'Léa', word:'planète'},
+      {name:'Tom', word:'Président'},
+      {name:'Noa', word:'école'},
+      {name:'Ilan', word:'musique'},
+      {name:'Yara', word:'poésie'},
+      {name:'Omar', word:'histoire'},
+      {name:'Lina', word:'chimie'},
+      {name:'Hugo', word:'géographie'},
+      {name:'Nina', word:'internet'},
+      {name:'Paul', word:'sport'},
+      {name:'Zoé', word:'mathématiques'}
+    ]);
+    if(room){ api('setnames', {code: room.code, key: room.adminKey, names: namesFromTable()})
+      .then(async () => { const en = readRosterEntries(); for(let i=0;i<en.length;i++) if(en[i].word) await pushWord(i, en[i].word); poll(); })
+      .catch(e => roomErr.textContent = e.message); }
+  };
+
+  clearBtn.onclick = () => { buildRosterRows(); rawPasteArea.value = ''; if(room) pushNames(); };
+
+  guessBtn.onclick = ()=> { processGuess(letterInput.value); letterInput.value=''; letterInput.focus(); };
+  letterInput.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); guessBtn.click(); } });
+
+  revealAllBtn.onclick = ()=> { // reveal only locally for each word (do not add to guessed list)
+    players.forEach(p => p.fullyRevealed = true);
+    updateAfterGuess();
+  };
+
+  editBtn.onclick = ()=> {
+    const entries = players.map(p => ({name: p.name, word: p.word}));
+    buildRosterRows(entries);
+    setupView.style.display='block'; gameView.style.display='none';
+    if(room) poll();
+  };
+
+  resetBtn.onclick = ()=> {
+    if(!confirm('Réinitialiser entièrement ?')) return;
+    players=[]; guessedLetters=new Set(); nextId=1;
+    if(room){ api('lock', {code: room.code, key: room.adminKey, locked: true}).catch(()=>{}); stopPoll(); room=null; roomData=null; saveRoom(); hideRoomPanel(); }
+    buildRosterRows(); rawPasteArea.value='';
+    setupView.style.display='block'; gameView.style.display='none';
+    renderPlayersColumn(); renderWordsGrid();
+  };
+
+  newRoundBtn.onclick = ()=> {
+    if(!confirm('Nouvelle manche : mots effacés, scores gardés ?')) return;
+    players.forEach(p=>{ p.word=''; p.norm=''; p.bonusGiven=false; p.fullyRevealed=false; });
+    const entries = players.map(p => ({name: p.name, word: ''}));
+    buildRosterRows(entries);
+    setupView.style.display='block'; gameView.style.display='none';
+    if(room){ api('newround', {code: room.code, key: room.adminKey}).then(poll).catch(e => roomErr.textContent = e.message); }
+  };
+
+  downloadBtn.onclick = ()=> { if(players.length===0){ alert('Pas de joueurs'); return; } const rows=[['Prénom','Score','Mot','Trouvé']]; players.forEach(p=>rows.push([p.name,String(p.score),p.word.replace(/,/g,' '), isWordFullyRevealed(p)?'oui':'non'])); const csv = rows.map(r => r.map(cell => `"${String(cell).replace(/"/g,'""')}"`).join(',')).join('\n'); const blob = new Blob([csv],{type:'text/csv;charset=utf-8;'}); const url = URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download='everybody-hangman-scores.csv'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url); };
+
+  // expose debug state
+  window.EverybodyHangman = { state: ()=> ({players: JSON.parse(JSON.stringify(players)), guessedLetters: Array.from(guessedLetters)}) };
+
+  // initial render
+  buildRosterRows();
+  try{
+    const saved = JSON.parse(localStorage.getItem(ROOM_LS));
+    if(saved && saved.code){ resumeRoomBtn.textContent = 'Reprendre la salle ' + saved.code; resumeRoomBtn.style.display = ''; }
+  }catch(e){}
+  renderGame();
+});
+</script>
+</body>
+</html>

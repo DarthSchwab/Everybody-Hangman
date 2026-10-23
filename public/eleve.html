@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Everybody Hangman — Mon mot</title>
+<style>
+  :root{--bg:#eef6ff;--card:#fff;--text:#0b2545;--muted:#5b6b80;--accent:#1e6fff;--good:#16a34a;--danger:#ef4444}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial;background:var(--bg);color:var(--text);min-height:100vh}
+  .wrap{max-width:480px;margin:0 auto;padding:20px 16px}
+  h1{font-size:1.3rem;margin:0 0 4px}
+  .muted{color:var(--muted);font-size:.95rem}
+  .card{background:var(--card);border-radius:14px;padding:18px;margin-top:16px;box-shadow:0 6px 18px rgba(13,38,80,.06)}
+  input{width:100%;padding:14px;font-size:1.2rem;border-radius:10px;border:1px solid rgba(11,37,69,.15);font-family:inherit}
+  input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(30,111,255,.15)}
+  .btn{width:100%;padding:14px;font-size:1.05rem;font-weight:800;border:none;border-radius:10px;background:var(--accent);color:#fff;cursor:pointer;margin-top:12px}
+  .btn.ghost{background:transparent;color:var(--text);border:1px solid rgba(11,37,69,.15)}
+  .btn:disabled{opacity:.5}
+  .names{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+  .name-btn{padding:14px 8px;border-radius:10px;border:1px solid rgba(11,37,69,.12);background:#f6fbff;font-size:1rem;font-weight:700;color:var(--text);cursor:pointer}
+  .name-btn:disabled{background:#eef1f5;color:#a0aab8;text-decoration:line-through;cursor:not-allowed}
+  .msg{margin-top:12px;font-weight:700;min-height:1.3em}
+  .msg.ok{color:var(--good)} .msg.err{color:var(--danger)}
+  .row{display:flex;gap:8px;align-items:center}
+  .row input{flex:1}
+  .eye{width:54px;height:54px;border-radius:10px;border:1px solid rgba(11,37,69,.15);background:#fff;font-size:1.3rem;cursor:pointer}
+  .big-ok{font-size:3rem;text-align:center}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🎯 Everybody Hangman</h1>
+  <div class="muted" id="sub">Écris ton mot à faire deviner</div>
+
+  <!-- 1. Code de salle -->
+  <div class="card hidden" id="vCode">
+    <label class="muted">Code affiché au tableau</label>
+    <input id="codeInput" maxlength="6" autocapitalize="characters" autocomplete="off" placeholder="ABCD" style="text-transform:uppercase;letter-spacing:6px;text-align:center;margin-top:6px" />
+    <button class="btn" id="codeBtn">Entrer</button>
+    <div class="msg err" id="codeMsg"></div>
+  </div>
+
+  <!-- 2. Choix du prénom -->
+  <div class="card hidden" id="vNames">
+    <strong>Touche TON prénom</strong>
+    <div class="muted">Une fois choisi, personne d'autre ne pourra le prendre.</div>
+    <div class="names" id="namesGrid"></div>
+    <div class="msg err" id="namesMsg"></div>
+  </div>
+
+  <!-- 3. Saisie du mot -->
+  <div class="card hidden" id="vWord">
+    <div style="font-size:1.15rem">Salut <strong id="meName"></strong> 👋</div>
+    <div class="muted" style="margin:4px 0 12px">Écris ton mot. Cache ton écran à tes voisins !</div>
+    <div class="row">
+      <input id="wordInput" type="password" maxlength="30" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Ton mot" />
+      <button class="eye" id="eyeBtn" title="Afficher / masquer">👁</button>
+    </div>
+    <button class="btn" id="sendBtn">Envoyer</button>
+    <div class="msg" id="wordMsg"></div>
+    <button class="btn ghost" id="notMeBtn" style="margin-top:24px;font-size:.9rem">Ce n'est pas moi</button>
+  </div>
+
+  <!-- 4. Partie lancée -->
+  <div class="card hidden" id="vLocked">
+    <div class="big-ok">🔒</div>
+    <p style="text-align:center;font-weight:700">La partie a commencé !<br>Regarde le tableau.</p>
+    <p class="muted" style="text-align:center">Cette page se débloquera toute seule à la prochaine manche.</p>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const views = ["vCode", "vNames", "vWord", "vLocked"];
+function show(v){ views.forEach(x => $(x).classList.toggle("hidden", x !== v)); }
+
+let code = (new URLSearchParams(location.search).get("salle") || "").toUpperCase();
+let me = null;         // {index, token, name}
+let round = null;
+let pollTimer = null;
+
+const lsKey = () => "ehm-" + code;
+function loadMe(){ try { return JSON.parse(localStorage.getItem(lsKey())); } catch { return null; } }
+function saveMe(v){ try { v ? localStorage.setItem(lsKey(), JSON.stringify(v)) : localStorage.removeItem(lsKey()); } catch {} }
+
+async function api(action, opts = {}){
+  const r = await fetch("/api/" + action + (opts.query ? "?" + new URLSearchParams(opts.query) : ""), opts.body ? {
+    method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify(opts.body)
+  } : {});
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw Object.assign(new Error(data.error || "Erreur réseau"), {status: r.status});
+  return data;
+}
+
+async function refresh(){
+  if (!code){ show("vCode"); return; }
+  const q = {code};
+  if (me) { q.index = me.index; q.token = me.token; }
+  let d;
+  try { d = await api("room", {query: q}); }
+  catch(e){
+    if (e.status === 404){ stopPoll(); code = ""; $("codeMsg").textContent = e.message; show("vCode"); }
+    return;
+  }
+  if (me && !d.mine){ me = null; saveMe(null); }   // case libérée par le prof
+  if (!me){ renderNames(d); show("vNames"); return; }
+
+  if (d.locked){ show("vLocked"); round = d.round; return; }
+  if (round !== null && d.round !== round){ $("wordInput").value = ""; $("wordMsg").textContent = "Nouvelle manche : écris un nouveau mot !"; $("wordMsg").className = "msg ok"; }
+  round = d.round;
+  $("meName").textContent = me.name;
+  if ($("vWord").classList.contains("hidden")){
+    $("wordInput").value = d.myWord || "";
+    if (d.myWord){ setOk("Mot envoyé ✓ Tu peux encore le changer."); }
+  }
+  show("vWord");
+}
+
+function renderNames(d){
+  const g = $("namesGrid"); g.innerHTML = "";
+  d.names.forEach((n, i) => {
+    if (!n) return;
+    const b = document.createElement("button");
+    b.className = "name-btn"; b.textContent = n; b.disabled = d.claimed[i];
+    b.onclick = () => claim(i, n);
+    g.appendChild(b);
+  });
+}
+
+async function claim(index, name){
+  if (!confirm("Tu es bien " + name + " ?")) return;
+  try {
+    const {token} = await api("claim", {body: {code, index}});
+    me = {index, token, name}; saveMe(me);
+    $("wordInput").value = ""; $("wordMsg").textContent = "";
+    refresh();
+  } catch(e){ $("namesMsg").textContent = e.message; refresh(); }
+}
+
+function setOk(t){ $("wordMsg").textContent = t; $("wordMsg").className = "msg ok"; }
+function setErr(t){ $("wordMsg").textContent = t; $("wordMsg").className = "msg err"; }
+
+$("sendBtn").onclick = async () => {
+  const word = $("wordInput").value.trim();
+  if (!word) return setErr("Écris un mot d'abord.");
+  $("sendBtn").disabled = true;
+  try { await api("word", {body: {code, index: me.index, token: me.token, word}}); setOk("Mot envoyé ✓ Tu peux encore le changer."); $("wordInput").type = "password"; }
+  catch(e){ setErr(e.message); if (e.status === 403 || e.status === 423) refresh(); }
+  finally { $("sendBtn").disabled = false; }
+};
+$("wordInput").addEventListener("keydown", e => { if (e.key === "Enter") $("sendBtn").click(); });
+$("eyeBtn").onclick = () => { const i = $("wordInput"); i.type = i.type === "password" ? "text" : "password"; };
+$("notMeBtn").onclick = () => { if (confirm("Revenir à la liste des prénoms ? Ta case restera réservée : demande au prof de la libérer.")) { me = null; saveMe(null); refresh(); } };
+
+$("codeBtn").onclick = () => {
+  code = $("codeInput").value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (!code) return;
+  history.replaceState(null, "", "?salle=" + code);
+  me = loadMe(); refresh(); startPoll();
+};
+$("codeInput").addEventListener("keydown", e => { if (e.key === "Enter") $("codeBtn").click(); });
+
+function startPoll(){ stopPoll(); pollTimer = setInterval(refresh, 3000); }
+function stopPoll(){ if (pollTimer) clearInterval(pollTimer); pollTimer = null; }
+
+if (code){ me = loadMe(); refresh(); startPoll(); } else show("vCode");
+</script>
+</body>
+</html>
