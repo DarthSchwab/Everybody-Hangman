@@ -166,7 +166,11 @@ export default async (req, context) => {
         if (!(i >= 0 && i < meta.names.length) || !meta.names[i]) return err("Case inconnue");
         const token = secret();
         const res = await s.setJSON(kClaim(code, i), { token, at: Date.now() }, { onlyIfNew: true });
-        if (!res.modified) return err("Ce prénom est déjà pris. Si c'est bien toi, demande au prof de libérer ta case.", 409);
+        // On relit la case pour vérifier qu'elle est bien à nous (ne dépend pas
+        // uniquement de la réponse de l'écriture conditionnelle).
+        const cur = await s.get(kClaim(code, i), { type: "json" });
+        const ok = (cur && cur.token === token) || (!cur && res && res.modified === true);
+        if (!ok) return err("Ce prénom est déjà pris. Si c'est bien toi, demande au prof de libérer ta case.", 409);
         return json({ token });
       }
 
