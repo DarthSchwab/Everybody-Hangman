@@ -371,7 +371,19 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   function namesFromTable(){ return readRosterEntries().map(e => e.name); }
   function studentUrl(){ return location.origin + '/eleve.html?salle=' + room.code; }
-  function saveRoom(){ try{ room ? localStorage.setItem(ROOM_LS, JSON.stringify(room)) : localStorage.removeItem(ROOM_LS); }catch(e){} }
+  // La salle n'est plus mémorisée : elle est supprimée quand on quitte la page.
+  function saveRoom(){ try{ localStorage.removeItem(ROOM_LS); }catch(e){} }
+  function deleteRoomNow(){ if(room) api('delete', {code: room.code, key: room.adminKey}).catch(()=>{}); }
+  // Page fermée / rechargée / onglet quitté : on efface la salle (prénoms + mots) du serveur.
+  window.addEventListener('pagehide', () => {
+    if(!room) return;
+    const data = new Blob([JSON.stringify({code: room.code, key: room.adminKey})], {type: 'application/json'});
+    if(!(navigator.sendBeacon && navigator.sendBeacon('/api/delete', data))){
+      fetch('/api/delete', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({code: room.code, key: room.adminKey}), keepalive: true});
+    }
+  });
+  // Petit garde-fou contre la fermeture accidentelle.
+  window.addEventListener('beforeunload', e => { if(room){ e.preventDefault(); e.returnValue = ''; } });
 
   function showRoomPanel(){
     roomPanel.style.display = '';
@@ -422,8 +434,8 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   document.getElementById('closeRoomBtn').onclick = () => {
-    if(!confirm('Fermer la salle ? Les mots déjà reçus restent dans le tableau, mais les téléphones ne pourront plus écrire.')) return;
-    api('lock', {code: room.code, key: room.adminKey, locked: true}).catch(()=>{});
+    if(!confirm('Fermer et supprimer la salle ? Les prénoms et les mots sont effacés du serveur. Les mots déjà reçus restent dans ton tableau, mais les téléphones ne pourront plus écrire.')) return;
+    deleteRoomNow();
     stopPoll(); room = null; roomData = null; saveRoom(); hideRoomPanel();
   };
 
@@ -488,10 +500,13 @@ document.addEventListener('DOMContentLoaded', () => {
       if(!name){ td.innerHTML = ''; return; }
       named++;
       const claimed = roomData.claimed[i];
+      const rejected = roomData.rejected && roomData.rejected[i];
       if(word) done++;
       let html = word ? '<span class="st done">✓ mot reçu</span>'
+               : rejected ? '<span class="st conn">↻ nouveau mot demandé</span>'
                : claimed ? '<span class="st conn">📱 connecté…</span>'
                : '<span class="st wait">en attente</span>';
+      if(word && claimed) html += ` <button type="button" class="mini rej" data-i="${i}" title="Effacer ce mot et en redemander un autre à l'élève">Refuser</button>`;
       if(claimed) html += ` <button type="button" class="mini rel" data-i="${i}" title="Libérer la case (si un élève s'est trompé de prénom)">Libérer</button>`;
       td.innerHTML = html;
     });
@@ -499,6 +514,13 @@ document.addEventListener('DOMContentLoaded', () => {
       const i = Number(b.dataset.i);
       if(!confirm('Libérer la case de ' + rows[i].querySelector('.roster-name').value + ' ? Son mot sera effacé et il pourra se reconnecter.')) return;
       await api('release', {code: room.code, key: room.adminKey, index: i}).catch(e => roomErr.textContent = e.message);
+      rows[i].querySelector('.roster-word').value = '';
+      poll();
+    });
+    rosterBody.querySelectorAll('.rej').forEach(b => b.onclick = async () => {
+      const i = Number(b.dataset.i);
+      if(!confirm('Refuser le mot de ' + rows[i].querySelector('.roster-name').value + ' ? Son téléphone lui demandera d\'en écrire un autre.')) return;
+      await api('reject', {code: room.code, key: room.adminKey, index: i}).catch(e => roomErr.textContent = e.message);
       rows[i].querySelector('.roster-word').value = '';
       poll();
     });
@@ -676,7 +698,7 @@ document.addEventListener('DOMContentLoaded', () => {
   resetBtn.onclick = ()=> {
     if(!confirm('Réinitialiser entièrement ?')) return;
     players=[]; guessedLetters=new Set(); nextId=1;
-    if(room){ api('lock', {code: room.code, key: room.adminKey, locked: true}).catch(()=>{}); stopPoll(); room=null; roomData=null; saveRoom(); hideRoomPanel(); }
+    if(room){ deleteRoomNow(); stopPoll(); room=null; roomData=null; saveRoom(); hideRoomPanel(); }
     buildRosterRows(); rawPasteArea.value='';
     setupView.style.display='block'; gameView.style.display='none';
     renderPlayersColumn(); renderWordsGrid();
@@ -698,10 +720,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // initial render
   buildRosterRows();
-  try{
-    const saved = JSON.parse(localStorage.getItem(ROOM_LS));
-    if(saved && saved.code){ resumeRoomBtn.textContent = 'Reprendre la salle ' + saved.code; resumeRoomBtn.style.display = ''; }
-  }catch(e){}
+  saveRoom(); // efface une éventuelle salle mémorisée par l'ancienne version
   renderGame();
 });
 </script>

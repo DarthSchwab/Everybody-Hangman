@@ -4,6 +4,7 @@
 // Les mots ne sont renvoyés qu'au prof (clé admin).
 import { getStore } from "@netlify/blobs";
 import { randomBytes } from "node:crypto";
+import { deleteRoom, cleanupOldRooms } from "../lib/rooms.mjs";
 
 export const config = { path: "/api/:action" };
 
@@ -33,6 +34,8 @@ function cleanWord(w) {
 const kMeta = (c) => `rooms/${c}/meta`;
 const kClaim = (c, i) => `rooms/${c}/claim/${i}`;
 const kWord = (c, r, i) => `rooms/${c}/r${r}/word/${i}`;
+const kRejected = (c, r, i) => `rooms/${c}/r${r}/rejected/${i}`;
+
 
 async function loadMeta(s, code) {
   return code ? await s.get(kMeta(code), { type: "json" }) : null;
@@ -63,6 +66,7 @@ export default async (req, context) => {
       case "create": {
         const names = (body.names || []).map(cleanName).slice(0, MAX_STUDENTS);
         if (!names.some(Boolean)) return err("Aucun prénom.");
+        await cleanupOldRooms(s).catch(() => {});
         for (let tries = 0; tries < 10; tries++) {
           const bytes = randomBytes(4);
           const c = Array.from(bytes, (b) => CODE_CHARS[b % CODE_CHARS.length]).join("");
@@ -78,10 +82,13 @@ export default async (req, context) => {
         if (!isAdmin(meta, url.searchParams.get("key"))) return err("Accès refusé", 403);
         const n = meta.names.length;
         const [claims, words] = await Promise.all([loadClaims(s, code, n), loadWords(s, code, meta.round, n)]);
+        const rejected = await Promise.all(meta.names.map((_, i) => s.get(kRejected(code, meta.round, i))));
         return json({
           names: meta.names, round: meta.round, locked: meta.locked,
           claimed: claims.map(Boolean),
           words: words.map((w) => (w && w.word) || ""),
+          byStudent: words.map((w) => !!(w && w.by === "eleve")),
+          rejected: rejected.map((r) => r !== null),
         });
       }
 
@@ -109,8 +116,26 @@ export default async (req, context) => {
         if (!(i >= 0 && i < meta.names.length)) return err("Case inconnue");
         const cw = cleanWord(body.word);
         if (!cw.ok) return err(cw.msg);
-        if (cw.word) await s.setJSON(kWord(code, meta.round, i), { word: cw.word, by: "prof" });
+        if (cw.word) { await s.setJSON(kWord(code, meta.round, i), { word: cw.word, by: "prof" }); await s.delete(kRejected(code, meta.round, i)); }
         else await s.delete(kWord(code, meta.round, i));
+        return json({ ok: true });
+      }
+
+      case "reject": { // mot refusé : on l'efface et on redemande un mot à l'élève
+        const meta = await loadMeta(s, code);
+        if (!isAdmin(meta, body.key)) return err("Accès refusé", 403);
+        const i = Number(body.index);
+        if (!(i >= 0 && i < meta.names.length)) return err("Case inconnue");
+        await s.delete(kWord(code, meta.round, i));
+        await s.set(kRejected(code, meta.round, i), "1");
+        return json({ ok: true });
+      }
+
+      case "delete": { // fermeture de la salle / page du prof quittée
+        const meta = await loadMeta(s, code);
+        if (!meta) return json({ ok: true });
+        if (!isAdmin(meta, body.key)) return err("Accès refusé", 403);
+        await deleteRoom(s, code);
         return json({ ok: true });
       }
 
@@ -120,6 +145,7 @@ export default async (req, context) => {
         const i = Number(body.index);
         await s.delete(kClaim(code, i));
         await s.delete(kWord(code, meta.round, i));
+        await s.delete(kRejected(code, meta.round, i));
         return json({ ok: true });
       }
 
@@ -152,8 +178,12 @@ export default async (req, context) => {
         if (token && i >= 0 && i < n) {
           out.mine = !!(claims[i] && claims[i].token === token);
           if (out.mine) {
-            const w = await s.get(kWord(code, meta.round, i), { type: "json" });
+            const [w, rj] = await Promise.all([
+              s.get(kWord(code, meta.round, i), { type: "json" }),
+              s.get(kRejected(code, meta.round, i)),
+            ]);
             out.myWord = (w && w.word) || "";
+            out.rejected = rj !== null;
           }
         }
         return json(out);
@@ -177,14 +207,16 @@ export default async (req, context) => {
       case "word": {
         const meta = await loadMeta(s, code);
         if (!meta) return err("Salle introuvable.", 404);
-        if (meta.locked) return err("La partie a commencé : les mots sont verrouillés.", 423);
         const i = Number(body.index);
+        const wasRejected = (await s.get(kRejected(code, meta.round, i))) !== null;
+        if (meta.locked && !wasRejected) return err("La partie a commencé : les mots sont verrouillés.", 423);
         const claim = await s.get(kClaim(code, i), { type: "json" });
         if (!claim || claim.token !== body.token) return err("Ce n'est pas ta case.", 403);
         const cw = cleanWord(body.word);
         if (!cw.ok) return err(cw.msg);
         if (!cw.word) return err("Écris un mot.");
         await s.setJSON(kWord(code, meta.round, i), { word: cw.word, by: "eleve" });
+        if (wasRejected) await s.delete(kRejected(code, meta.round, i));
         return json({ ok: true });
       }
 

@@ -101,7 +101,12 @@ async function refresh(){
   let d;
   try { d = await api("room", {query: q}); }
   catch(e){
-    if (e.status === 404){ stopPoll(); code = ""; $("codeMsg").textContent = e.message; show("vCode"); }
+    if (e.status === 404){
+      stopPoll(); saveMe(null); me = null; code = "";
+      history.replaceState(null, "", location.pathname);
+      $("codeMsg").textContent = "Cette salle est fermée (ou le code est faux).";
+      show("vCode");
+    }
     return;
   }
   // Case libérée par le prof ? On attend 3 réponses négatives d'affilée (~9 s)
@@ -114,6 +119,14 @@ async function refresh(){
   } else notMine = 0;
   if (!me){ renderNames(d); show("vNames"); return; }
 
+  if (d.rejected){
+    // le prof a refusé le mot : on vide la case et on redemande (même si la partie est lancée)
+    if (!wasRejected){ $("wordInput").value = ""; $("wordInput").type = "password"; }
+    wasRejected = true; round = d.round;
+    setErr("Le prof a refusé ton mot. Écris-en un autre !");
+    showWord(); return;
+  }
+  wasRejected = false;
   if (d.locked){ show("vLocked"); round = d.round; return; }
   if (round !== null && d.round !== round){ $("wordInput").value = ""; $("wordMsg").textContent = "Nouvelle manche : écris un nouveau mot !"; $("wordMsg").className = "msg ok"; }
   round = d.round;
@@ -147,6 +160,7 @@ async function claim(index, name){
 }
 
 let notMine = 0;
+let wasRejected = false;
 function showWord(){
   if (!me) return;
   $("meName").textContent = me.name;
@@ -164,7 +178,8 @@ $("sendBtn").onclick = async () => {
   try {
     try { await send(); }
     catch(e){ if (e.status !== 403) throw e; await new Promise(r => setTimeout(r, 1500)); await send(); } // une 2e chance si la réservation n'est pas encore visible
-    setOk("Mot envoyé ✓ Tu peux encore le changer."); $("wordInput").type = "password"; }
+    wasRejected = false;
+    setOk("Mot envoyé ✓ Tu peux encore le changer."); $("wordInput").type = "password"; refresh(); }
   catch(e){ setErr(e.message); if (e.status === 403 || e.status === 423) refresh(); }
   finally { $("sendBtn").disabled = false; }
 };
